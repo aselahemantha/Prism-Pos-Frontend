@@ -40,8 +40,35 @@ function App() {
 
   // Navigation and views
   const [authView, setAuthView] = useState<'login' | 'register' | 'accept-invite'>('login')
-  const [activeTab, setActiveTab] = useState<'overview' | 'pos' | 'sales' | 'stores' | 'terminals' | 'invites' | 'catalog' | 'inventory'>('pos')
+  const [activeTab, setActiveTab] = useState<'overview' | 'pos' | 'sales' | 'stores' | 'terminals' | 'invites' | 'catalog' | 'inventory' | 'crm' | 'reports' | 'settings'>('pos')
   const [catalogSubTab, setCatalogSubTab] = useState<'products' | 'categories'>('products')
+
+  // CRM / Customer state
+  const [customers, setCustomers] = useState<any[]>([])
+  const [crmSearchQuery, setCrmSearchQuery] = useState<string>('')
+  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null)
+  const [custName, setCustName] = useState<string>('')
+  const [custEmail, setCustEmail] = useState<string>('')
+  const [custPhone, setCustPhone] = useState<string>('')
+  const [custLoyaltyPoints, setCustLoyaltyPoints] = useState<string>('')
+
+  // Selected Customer ID for POS order link
+  const [selectedCustomerID, setSelectedCustomerID] = useState<string | null>(null)
+
+  // Store Settings state
+  const [settingsTaxRate, setSettingsTaxRate] = useState<string>('0')
+  const [settingsReceiptHeader, setSettingsReceiptHeader] = useState<string>('')
+  const [settingsReceiptFooter, setSettingsReceiptFooter] = useState<string>('')
+  const [settingsReceiptLogo, setSettingsReceiptLogo] = useState<string>('')
+  const [settingsCurrency, setSettingsCurrency] = useState<string>('USD')
+
+  // Reports state
+  const [reportsSubTab, setReportsSubTab] = useState<'daily-sales' | 'top-products' | 'valuation'>('daily-sales')
+  const [reportsStartDate, setReportsStartDate] = useState<string>(new Date().toISOString().split('T')[0])
+  const [reportsEndDate, setReportsEndDate] = useState<string>(new Date().toISOString().split('T')[0])
+  const [dailySalesSummary, setDailySalesSummary] = useState<any | null>(null)
+  const [topProducts, setTopProducts] = useState<any[]>([])
+  const [inventoryValuation, setInventoryValuation] = useState<any | null>(null)
   const [inventorySubTab, setInventorySubTab] = useState<'stock' | 'logs'>('stock')
 
   // Domain data
@@ -174,6 +201,7 @@ function App() {
         fetchProducts()
         fetchCategories()
         fetchParkedOrders()
+        fetchCustomers()
       }
       if (activeTab === 'sales') {
         fetchPastOrders()
@@ -187,10 +215,37 @@ function App() {
         fetchMovements()
         fetchProducts()
       }
+      if (activeTab === 'crm') {
+        fetchCustomers()
+      }
+      if (activeTab === 'reports') {
+        if (reportsSubTab === 'daily-sales') fetchDailySales()
+        if (reportsSubTab === 'top-products') fetchTopProducts()
+        if (reportsSubTab === 'valuation') fetchInventoryValuation()
+      }
+      if (activeTab === 'settings') {
+        fetchStoreSettings()
+      }
     } else {
       setTerminals([])
     }
   }, [token, activeStoreID, activeTab])
+
+  // Refetch reports when parameters change
+  useEffect(() => {
+    if (token && activeStoreID && activeTab === 'reports') {
+      if (reportsSubTab === 'daily-sales') fetchDailySales()
+      if (reportsSubTab === 'top-products') fetchTopProducts()
+      if (reportsSubTab === 'valuation') fetchInventoryValuation()
+    }
+  }, [token, activeStoreID, activeTab, reportsSubTab, reportsStartDate, reportsEndDate])
+
+  // Refetch customers on search query change
+  useEffect(() => {
+    if (token && activeTab === 'crm') {
+      fetchCustomers()
+    }
+  }, [crmSearchQuery])
 
   // API wrapper that handles headers, active store ID scoping, and token refreshing
   const apiCall = async (path: string, options: RequestInit = {}): Promise<any> => {
@@ -605,8 +660,67 @@ function App() {
     }
   }
 
+  const fetchCustomers = async () => {
+    if (localStorage.getItem('prism_offline') === 'true') {
+      const cached = localStorage.getItem('prism_cache_customers')
+      if (cached) setCustomers(JSON.parse(cached))
+      return
+    }
+    try {
+      const data = await apiCall(`/customers?search=${crmSearchQuery || ''}`)
+      setCustomers(data || [])
+      localStorage.setItem('prism_cache_customers', JSON.stringify(data || []))
+    } catch (err: any) {
+      console.error('Failed to fetch customers:', err.message)
+      const cached = localStorage.getItem('prism_cache_customers')
+      if (cached) setCustomers(JSON.parse(cached))
+    }
+  }
+
+  const fetchDailySales = async () => {
+    try {
+      const data = await apiCall(`/reports/daily-sales?start_date=${reportsStartDate}&end_date=${reportsEndDate}`)
+      setDailySalesSummary(data)
+    } catch (err: any) {
+      console.error('Failed to fetch daily sales:', err.message)
+    }
+  }
+
+  const fetchTopProducts = async () => {
+    try {
+      const data = await apiCall(`/reports/top-products?start_date=${reportsStartDate}&end_date=${reportsEndDate}`)
+      setTopProducts(data || [])
+    } catch (err: any) {
+      console.error('Failed to fetch top products:', err.message)
+    }
+  }
+
+  const fetchInventoryValuation = async () => {
+    try {
+      const data = await apiCall('/reports/inventory-valuation')
+      setInventoryValuation(data)
+    } catch (err: any) {
+      console.error('Failed to fetch inventory valuation:', err.message)
+    }
+  }
+
+  const fetchStoreSettings = async () => {
+    try {
+      const data = await apiCall('/stores/settings')
+      if (data) {
+        setSettingsTaxRate(data.tax_rate_default?.toString() || '0')
+        setSettingsReceiptHeader(data.receipt_header || '')
+        setSettingsReceiptFooter(data.receipt_footer || '')
+        setSettingsReceiptLogo(data.receipt_logo_url || '')
+        setSettingsCurrency(data.currency || 'USD')
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch store settings:', err.message)
+    }
+  }
+
   // POS CART ACTIONS & INTEGRATION
-  const syncCartWithBackend = async (itemsList: any[], discType: string, discVal: string, notes: string) => {
+  const syncCartWithBackend = async (itemsList: any[], discType: string, discVal: string, notes: string, custID: string | null = selectedCustomerID) => {
     if (!activeStoreID || terminals.length === 0) return activeOrderID
 
     const mappedItems = itemsList.map(item => ({
@@ -618,6 +732,7 @@ function App() {
 
     const payload = {
       terminal_id: terminals[0].id, // Default to first terminal in store
+      customer_id: custID || undefined,
       notes: notes,
       discount_type: discType,
       discount_value: parseFloat(discVal) || 0,
@@ -645,6 +760,11 @@ function App() {
       setErrorMsg('Sync Error: ' + err.message)
       return activeOrderID
     }
+  }
+
+  const handleCustomerChange = async (custId: string) => {
+    setSelectedCustomerID(custId || null)
+    await syncCartWithBackend(cartItems, orderDiscountType, orderDiscountValue, orderNotes, custId || null)
   }
 
   const addToCart = async (product: any) => {
@@ -1044,6 +1164,7 @@ function App() {
       setOrderDiscountType('')
       setOrderDiscountValue('')
       setOrderNotes('')
+      setSelectedCustomerID(null)
       return
     }
 
@@ -1066,6 +1187,7 @@ function App() {
       setOrderDiscountType('')
       setOrderDiscountValue('')
       setOrderNotes('')
+      setSelectedCustomerID(null)
       
       fetchParkedOrders()
       fetchInventory()
@@ -1076,7 +1198,101 @@ function App() {
 
   const handleCloseCheckoutModal = () => {
     setCheckoutModalOpen(false)
+    setSelectedCustomerID(null)
     fetchPastOrders()
+  }
+
+  // CRM & Store Settings Domain Handlers
+  const handleCreateCustomer = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setErrorMsg(null)
+    setSuccessMsg(null)
+    try {
+      const body = {
+        name: custName,
+        email: custEmail || undefined,
+        phone: custPhone || undefined
+      }
+      await apiCall('/customers', {
+        method: 'POST',
+        body: JSON.stringify(body)
+      })
+      setSuccessMsg(`Customer "${custName}" registered successfully`)
+      setCustName('')
+      setCustEmail('')
+      setCustPhone('')
+      fetchCustomers()
+    } catch (err: any) {
+      setErrorMsg(err.message)
+    }
+  }
+
+  const handleUpdateCustomer = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedCustomer) return
+    setErrorMsg(null)
+    setSuccessMsg(null)
+    try {
+      const body: any = {
+        name: custName,
+        email: custEmail,
+        phone: custPhone,
+      }
+      if (custLoyaltyPoints !== '') {
+        body.loyalty_points = parseInt(custLoyaltyPoints) || 0
+      }
+      await apiCall(`/customers/${selectedCustomer.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(body)
+      })
+      setSuccessMsg(`Customer "${custName}" updated successfully`)
+      setSelectedCustomer(null)
+      setCustName('')
+      setCustEmail('')
+      setCustPhone('')
+      setCustLoyaltyPoints('')
+      fetchCustomers()
+    } catch (err: any) {
+      setErrorMsg(err.message)
+    }
+  }
+
+  const handleDeleteCustomer = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this customer?')) return
+    setErrorMsg(null)
+    setSuccessMsg(null)
+    try {
+      await apiCall(`/customers/${id}`, {
+        method: 'DELETE'
+      })
+      setSuccessMsg('Customer deleted successfully')
+      fetchCustomers()
+    } catch (err: any) {
+      setErrorMsg(err.message)
+    }
+  }
+
+  const handleUpdateStoreSettings = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setErrorMsg(null)
+    setSuccessMsg(null)
+    try {
+      const body = {
+        tax_rate_default: parseFloat(settingsTaxRate) || 0,
+        receipt_header: settingsReceiptHeader,
+        receipt_footer: settingsReceiptFooter,
+        receipt_logo_url: settingsReceiptLogo,
+        currency: settingsCurrency
+      }
+      await apiCall('/stores/settings', {
+        method: 'PUT',
+        body: JSON.stringify(body)
+      })
+      setSuccessMsg('Store settings updated successfully')
+      fetchStoreSettings()
+    } catch (err: any) {
+      setErrorMsg(err.message)
+    }
   }
 
   // STANDARD DOMAIN HANDLERS
@@ -1593,6 +1809,21 @@ function App() {
               ✉️ User Invites
             </button>
           )}
+          {user && (user.permissions.includes('crm:read') || user.permissions.includes('crm:write')) && (
+            <button className={`sidebar-btn ${activeTab === 'crm' ? 'active' : ''}`} onClick={() => setActiveTab('crm')}>
+              👥 Customers & CRM
+            </button>
+          )}
+          {user && user.permissions.includes('report:read') && (
+            <button className={`sidebar-btn ${activeTab === 'reports' ? 'active' : ''}`} onClick={() => setActiveTab('reports')}>
+              📈 Business Reports
+            </button>
+          )}
+          {user && (user.permissions.includes('settings:read') || user.permissions.includes('settings:write')) && (
+            <button className={`sidebar-btn ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>
+              ⚙️ Store Settings
+            </button>
+          )}
         </aside>
 
         <main className="panel-container">
@@ -1771,6 +2002,32 @@ function App() {
 
                 {cartItems.length > 0 && (
                   <div>
+                    {/* Link Customer to Sale */}
+                    <div className="form-group" style={{ marginBottom: '1rem', borderBottom: '1px dashed rgba(255,255,255,0.08)', paddingBottom: '1rem' }}>
+                      <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>
+                        👤 Link Customer to Sale (Loyalty)
+                      </label>
+                      <select
+                        className="form-control"
+                        value={selectedCustomerID || ''}
+                        onChange={(e) => handleCustomerChange(e.target.value)}
+                        style={{ fontSize: '0.85rem' }}
+                      >
+                        <option value="">Guest (No Loyalty Points)</option>
+                        {customers.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} ({c.phone || c.email || 'No Contact'}) - {c.loyalty_tier} ({c.loyalty_points} pts)
+                          </option>
+                        ))}
+                      </select>
+                      {selectedCustomerID && (
+                        <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', color: 'var(--accent)' }}>
+                          <span>Loyalty Status:</span>
+                          <strong>Active ({customers.find(c => c.id === selectedCustomerID)?.loyalty_tier || 'BRONZE'})</strong>
+                        </div>
+                      )}
+                    </div>
+
                     {/* Cart Summary */}
                     <div className="cart-totals">
                       <div className="cart-total-line">
@@ -2720,6 +2977,493 @@ function App() {
               )}
             </div>
           )}
+
+          {/* TAB 9: CUSTOMERS & CRM */}
+          {activeTab === 'crm' && (
+            <div className="crm-layout">
+              <div className="split-layout">
+                {/* Left side: Create/Update form */}
+                <div className="glass-panel" style={{ padding: '2rem' }}>
+                  <div className="panel-header">
+                    <h3>{selectedCustomer ? '✏️ Edit Customer Profile' : '👥 Register New Customer'}</h3>
+                  </div>
+                  <form onSubmit={selectedCustomer ? handleUpdateCustomer : handleCreateCustomer} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
+                    <div className="form-group">
+                      <label>Customer Name</label>
+                      <input
+                        type="text"
+                        className="form-control"
+                        placeholder="John Doe"
+                        value={custName}
+                        onChange={(e) => setCustName(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Email Address</label>
+                      <input
+                        type="email"
+                        className="form-control"
+                        placeholder="john@example.com"
+                        value={custEmail}
+                        onChange={(e) => setCustEmail(e.target.value)}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Phone Number</label>
+                      <input
+                        type="text"
+                        className="form-control"
+                        placeholder="+1 (555) 019-2834"
+                        value={custPhone}
+                        onChange={(e) => setCustPhone(e.target.value)}
+                      />
+                    </div>
+                    {selectedCustomer && (
+                      <div className="form-group" style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '1rem' }}>
+                        <label>Loyalty Points</label>
+                        <input
+                          type="number"
+                          className="form-control"
+                          placeholder="Adjust loyalty points"
+                          value={custLoyaltyPoints}
+                          onChange={(e) => setCustLoyaltyPoints(e.target.value)}
+                        />
+                        <small style={{ color: 'var(--text-muted)' }}>Updating points will automatically adjust the tier.</small>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                      <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>
+                        {selectedCustomer ? 'Save Changes' : 'Register Customer'}
+                      </button>
+                      {selectedCustomer && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => {
+                            setSelectedCustomer(null)
+                            setCustName('')
+                            setCustEmail('')
+                            setCustPhone('')
+                            setCustLoyaltyPoints('')
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                </div>
+
+                {/* Right side: Customers list */}
+                <div className="glass-panel" style={{ padding: '2rem', flex: 1.5 }}>
+                  <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+                    <h3>Registered Customers</h3>
+                    <input
+                      type="text"
+                      className="form-control"
+                      placeholder="Search name, phone, email..."
+                      value={crmSearchQuery}
+                      onChange={(e) => setCrmSearchQuery(e.target.value)}
+                      style={{ maxWidth: '250px' }}
+                    />
+                  </div>
+                  {customers.length > 0 ? (
+                    <div className="table-wrapper" style={{ marginTop: '1rem' }}>
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th>Phone</th>
+                            <th>Loyalty Tier</th>
+                            <th>Points</th>
+                            <th>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {customers.map((c) => (
+                            <tr key={c.id}>
+                              <td><strong>{c.name}</strong></td>
+                              <td>{c.email || <span style={{ color: 'var(--text-muted)' }}>-</span>}</td>
+                              <td>{c.phone || <span style={{ color: 'var(--text-muted)' }}>-</span>}</td>
+                              <td>
+                                <span className={`badge badge-tier-${(c.loyalty_tier || 'BRONZE').toLowerCase()}`}>
+                                  {c.loyalty_tier || 'BRONZE'}
+                                </span>
+                              </td>
+                              <td>
+                                <strong style={{ color: 'var(--accent)' }}>{c.loyalty_points}</strong>
+                              </td>
+                              <td>
+                                <div style={{ display: 'flex', gap: '0.25rem' }}>
+                                  <button
+                                    className="btn btn-secondary"
+                                    onClick={() => {
+                                      setSelectedCustomer(c)
+                                      setCustName(c.name)
+                                      setCustEmail(c.email || '')
+                                      setCustPhone(c.phone || '')
+                                      setCustLoyaltyPoints(c.loyalty_points?.toString() || '0')
+                                    }}
+                                    style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    className="btn btn-danger"
+                                    onClick={() => handleDeleteCustomer(c.id)}
+                                    style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p style={{ color: 'var(--text-muted)', marginTop: '1rem' }}>No customers registered yet.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 10: REPORTS */}
+          {activeTab === 'reports' && (
+            <div className="reports-layout glass-panel" style={{ padding: '2rem' }}>
+              {/* Visible ONLY when printing */}
+              <div className="print-report-header" style={{ display: 'none' }}>
+                <h1 style={{ fontSize: '1.8rem', color: 'black', marginBottom: '0.25rem' }}>PRISM POS - Business Report</h1>
+                <p style={{ fontSize: '0.9rem', color: '#555' }}>
+                  Generated on: {new Date().toLocaleString()} | Active Store: {companyInfo?.name || 'All Branches'}
+                </p>
+                {reportsSubTab !== 'valuation' && (
+                  <p style={{ fontSize: '0.9rem', color: '#555', marginTop: '0.2rem' }}>
+                    Report Period: {reportsStartDate} to {reportsEndDate}
+                  </p>
+                )}
+                <h2 style={{ fontSize: '1.4rem', marginTop: '1rem', borderTop: '1px solid #ccc', paddingTop: '0.5rem' }}>
+                  {reportsSubTab === 'daily-sales' && 'Daily Sales Summary Report'}
+                  {reportsSubTab === 'top-products' && 'Top Selling Products Report'}
+                  {reportsSubTab === 'valuation' && 'Inventory Financial Valuation Report'}
+                </h2>
+              </div>
+
+              <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '1rem', marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    className={`btn ${reportsSubTab === 'daily-sales' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setReportsSubTab('daily-sales')}
+                    style={{ padding: '0.5rem 1rem' }}
+                  >
+                    📊 Daily Sales Summary
+                  </button>
+                  <button
+                    className={`btn ${reportsSubTab === 'top-products' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setReportsSubTab('top-products')}
+                    style={{ padding: '0.5rem 1rem' }}
+                  >
+                    🏆 Top Selling Products
+                  </button>
+                  <button
+                    className={`btn ${reportsSubTab === 'valuation' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setReportsSubTab('valuation')}
+                    style={{ padding: '0.5rem 1rem' }}
+                  >
+                    💰 Inventory Financial Valuation
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  {reportsSubTab !== 'valuation' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input
+                        type="date"
+                        className="form-control"
+                        value={reportsStartDate}
+                        onChange={(e) => setReportsStartDate(e.target.value)}
+                        style={{ padding: '0.4rem', fontSize: '0.85rem' }}
+                      />
+                      <span style={{ color: 'var(--text-muted)' }}>to</span>
+                      <input
+                        type="date"
+                        className="form-control"
+                        value={reportsEndDate}
+                        onChange={(e) => setReportsEndDate(e.target.value)}
+                        style={{ padding: '0.4rem', fontSize: '0.85rem' }}
+                      />
+                    </div>
+                  )}
+                  <button 
+                    className="btn btn-secondary" 
+                    onClick={() => window.print()}
+                    style={{ padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.85rem' }}
+                  >
+                    📄 Export PDF
+                  </button>
+                </div>
+              </div>
+
+              {/* Daily Sales tab */}
+              {reportsSubTab === 'daily-sales' && (
+                <div>
+                  {dailySalesSummary ? (
+                    <div>
+                      {/* Metric cards */}
+                      <div className="data-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', marginBottom: '2rem' }}>
+                        <div className="glass-panel data-card" style={{ borderLeft: '3px solid var(--accent)' }}>
+                          <span className="card-label">Total Revenue</span>
+                          <strong style={{ fontSize: '1.8rem', color: 'var(--accent)' }}>
+                            ${dailySalesSummary.total_revenue.toFixed(2)}
+                          </strong>
+                        </div>
+                        <div className="glass-panel data-card" style={{ borderLeft: '3px solid var(--primary)' }}>
+                          <span className="card-label">Completed Orders</span>
+                          <strong style={{ fontSize: '1.8rem', color: 'var(--text-main)' }}>
+                            {dailySalesSummary.order_count}
+                          </strong>
+                        </div>
+                        <div className="glass-panel data-card" style={{ borderLeft: '3px solid var(--secondary)' }}>
+                          <span className="card-label">Average Order Value (AOV)</span>
+                          <strong style={{ fontSize: '1.8rem', color: 'var(--secondary)' }}>
+                            ${dailySalesSummary.average_order_value.toFixed(2)}
+                          </strong>
+                        </div>
+                        <div className="glass-panel data-card" style={{ borderLeft: '3px solid var(--success)' }}>
+                          <span className="card-label">Tax Collected</span>
+                          <strong style={{ fontSize: '1.8rem', color: 'var(--success)' }}>
+                            ${dailySalesSummary.tax_collected.toFixed(2)}
+                          </strong>
+                        </div>
+                        <div className="glass-panel data-card" style={{ borderLeft: '3px solid #fb7185' }}>
+                          <span className="card-label">Discounts Applied</span>
+                          <strong style={{ fontSize: '1.8rem', color: '#fb7185' }}>
+                            -${dailySalesSummary.discount_amount.toFixed(2)}
+                          </strong>
+                        </div>
+                        <div className="glass-panel data-card" style={{ borderLeft: '3px solid var(--danger)' }}>
+                          <span className="card-label">Voided Orders</span>
+                          <strong style={{ fontSize: '1.8rem', color: 'var(--danger)' }}>
+                            {dailySalesSummary.voided_order_count} (${dailySalesSummary.voided_order_amount.toFixed(2)})
+                          </strong>
+                        </div>
+                      </div>
+
+                      {/* Payment Methods breakdown */}
+                      <div className="glass-panel" style={{ padding: '1.5rem', maxWidth: '500px' }}>
+                        <h4 style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>💵 Payments Breakdown</h4>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                          {Object.keys(dailySalesSummary.payments_breakdown).length > 0 ? (
+                            Object.entries(dailySalesSummary.payments_breakdown).map(([method, amount]: any) => (
+                              <div key={method} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.5rem' }}>
+                                <span style={{ textTransform: 'uppercase', fontWeight: '600' }}>{method}</span>
+                                <strong>${amount.toFixed(2)}</strong>
+                              </div>
+                            ))
+                          ) : (
+                            <p style={{ color: 'var(--text-muted)' }}>No completed transaction payments found for this period.</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <p style={{ color: 'var(--text-muted)' }}>Fetching sales summary data...</p>
+                  )}
+                </div>
+              )}
+
+              {/* Top Products tab */}
+              {reportsSubTab === 'top-products' && (
+                <div>
+                  {topProducts.length > 0 ? (
+                    <div className="table-wrapper">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: '80px' }}>Rank</th>
+                            <th>Product Name</th>
+                            <th>SKU</th>
+                            <th>Quantity Sold</th>
+                            <th>Total Revenue</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {topProducts.map((p, idx) => (
+                            <tr key={p.product_id}>
+                              <td><strong>#{idx + 1}</strong></td>
+                              <td><strong>{p.product_name}</strong></td>
+                              <td><code>{p.product_sku}</code></td>
+                              <td>{p.quantity_sold}</td>
+                              <td><strong style={{ color: 'var(--accent)' }}>${p.total_revenue.toFixed(2)}</strong></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p style={{ color: 'var(--text-muted)' }}>No product sales recorded in this date range.</p>
+                  )}
+                </div>
+              )}
+
+              {/* Inventory Valuation tab */}
+              {reportsSubTab === 'valuation' && (
+                <div>
+                  {inventoryValuation ? (
+                    <div>
+                      {/* Valuation cards */}
+                      <div className="data-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginBottom: '2rem' }}>
+                        <div className="glass-panel data-card" style={{ borderLeft: '3px solid var(--primary)' }}>
+                          <span className="card-label">Total Stock Quantity</span>
+                          <strong style={{ fontSize: '1.8rem', color: 'var(--text-main)' }}>
+                            {inventoryValuation.total_items_in_stock}
+                          </strong>
+                        </div>
+                        <div className="glass-panel data-card" style={{ borderLeft: '3px solid var(--accent)' }}>
+                          <span className="card-label">Total Retail Value</span>
+                          <strong style={{ fontSize: '1.8rem', color: 'var(--accent)' }}>
+                            ${inventoryValuation.total_retail_value.toFixed(2)}
+                          </strong>
+                        </div>
+                        <div className="glass-panel data-card" style={{ borderLeft: '3px solid var(--secondary)' }}>
+                          <span className="card-label">Total Cost Value</span>
+                          <strong style={{ fontSize: '1.8rem', color: 'var(--secondary)' }}>
+                            ${inventoryValuation.total_cost_value.toFixed(2)}
+                          </strong>
+                        </div>
+                        <div className="glass-panel data-card" style={{ borderLeft: '3px solid var(--success)' }}>
+                          <span className="card-label">Potential Gross Profit</span>
+                          <strong style={{ fontSize: '1.8rem', color: 'var(--success)' }}>
+                            ${inventoryValuation.potential_profit.toFixed(2)}
+                          </strong>
+                        </div>
+                        <div className="glass-panel data-card" style={{ borderLeft: '3px solid #f59e0b' }}>
+                          <span className="card-label">Profit Margin</span>
+                          <strong style={{ fontSize: '1.8rem', color: '#f59e0b' }}>
+                            {inventoryValuation.profit_margin.toFixed(2)}%
+                          </strong>
+                        </div>
+                      </div>
+
+                      {/* Category Breakdown Table */}
+                      <div className="panel-header" style={{ marginBottom: '0.75rem' }}>
+                        <h3>Valuation Breakdown by Category</h3>
+                      </div>
+                      <div className="table-wrapper">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Category</th>
+                              <th>Items in Stock</th>
+                              <th>Retail Value</th>
+                              <th>Cost Value</th>
+                              <th>Potential Profit</th>
+                              <th>Margin</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(inventoryValuation.category_breakdown).map(([catName, val]: any) => {
+                              const potentialProfit = val.retail_value - val.cost_value
+                              const margin = val.retail_value > 0 ? (potentialProfit / val.retail_value) * 100 : 0
+                              return (
+                                <tr key={catName}>
+                                  <td><strong>{catName}</strong></td>
+                                  <td>{val.total_items}</td>
+                                  <td>${val.retail_value.toFixed(2)}</td>
+                                  <td>${val.cost_value.toFixed(2)}</td>
+                                  <td><strong style={{ color: 'var(--success)' }}>${potentialProfit.toFixed(2)}</strong></td>
+                                  <td><strong style={{ color: '#f59e0b' }}>{margin.toFixed(2)}%</strong></td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    <p style={{ color: 'var(--text-muted)' }}>Fetching inventory valuation...</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 11: STORE SETTINGS */}
+          {activeTab === 'settings' && (
+            <div className="settings-layout glass-panel" style={{ padding: '2rem', maxWidth: '600px', margin: '0 auto' }}>
+              <div className="panel-header">
+                <h3>⚙️ Store Settings & Configurations</h3>
+              </div>
+              <form onSubmit={handleUpdateStoreSettings} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1.5rem' }}>
+                <div className="form-group">
+                  <label>Store Currency</label>
+                  <select
+                    className="form-control"
+                    value={settingsCurrency}
+                    onChange={(e) => setSettingsCurrency(e.target.value)}
+                    required
+                  >
+                    <option value="USD">USD ($)</option>
+                    <option value="EUR">EUR (€)</option>
+                    <option value="GBP">GBP (£)</option>
+                    <option value="AUD">AUD (A$)</option>
+                    <option value="LKR">LKR (Rs)</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Default Store Tax Rate (%)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="form-control"
+                    placeholder="e.g. 8.25"
+                    value={settingsTaxRate}
+                    onChange={(e) => setSettingsTaxRate(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group" style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '1.25rem' }}>
+                  <label>Receipt Logo URL</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="https://example.com/logo.png"
+                    value={settingsReceiptLogo}
+                    onChange={(e) => setSettingsReceiptLogo(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Receipt Header Text</label>
+                  <textarea
+                    className="form-control"
+                    rows={2}
+                    placeholder="Welcome to Acme Store Branch!"
+                    value={settingsReceiptHeader}
+                    onChange={(e) => setSettingsReceiptHeader(e.target.value)}
+                    style={{ resize: 'none' }}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Receipt Footer Text</label>
+                  <textarea
+                    className="form-control"
+                    rows={2}
+                    placeholder="Thank you for shopping with us! Please come again."
+                    value={settingsReceiptFooter}
+                    onChange={(e) => setSettingsReceiptFooter(e.target.value)}
+                    style={{ resize: 'none' }}
+                  />
+                </div>
+                <button type="submit" className="btn btn-primary" style={{ marginTop: '0.5rem', width: '100%', padding: '1rem' }}>
+                  💾 Save Settings Configuration
+                </button>
+              </form>
+            </div>
+          )}
         </main>
       </div>
 
@@ -2823,6 +3567,12 @@ function App() {
                     <span style={{ color: 'var(--success)' }}>Change Returned:</span>
                     <strong style={{ color: 'var(--success)' }}>${checkoutChangeAmount.toFixed(2)}</strong>
                   </div>
+                  {selectedCustomerID && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.95rem', borderTop: '1px dotted rgba(255,255,255,0.08)', paddingTop: '0.4rem', marginTop: '0.1rem' }}>
+                      <span style={{ color: 'var(--accent)' }}>Loyalty Points Earned:</span>
+                      <strong style={{ color: 'var(--accent)' }}>+{Math.floor(cartSummary.grandTotal)} pts</strong>
+                    </div>
+                  )}
                 </div>
 
                 {checkoutReceiptURL && (
