@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react'
+import RestaurantPOS from './components/restaurant/RestaurantPOS'
+import KitchenDisplay from './components/restaurant/KitchenDisplay'
 
 const API_BASE = 'http://localhost:8080/api/v1'
 
@@ -155,6 +157,9 @@ function App() {
   const [updatingReorderProdID, setUpdatingReorderProdID] = useState<string | null>(null)
   const [newReorderLevel, setNewReorderLevel] = useState('')
 
+  // Modules State
+  const [activeModules, setActiveModules] = useState<string[]>([])
+
   // UI state
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
@@ -196,6 +201,7 @@ function App() {
   useEffect(() => {
     if (token && activeStoreID) {
       fetchTerminals()
+      fetchStoreModules()
       
       if (activeTab === 'pos') {
         fetchProducts()
@@ -225,6 +231,7 @@ function App() {
       }
       if (activeTab === 'settings') {
         fetchStoreSettings()
+        fetchStoreModules()
       }
     } else {
       setTerminals([])
@@ -716,6 +723,36 @@ function App() {
       }
     } catch (err: any) {
       console.error('Failed to fetch store settings:', err.message)
+    }
+  }
+
+  const fetchStoreModules = async () => {
+    try {
+      const data = await apiCall('/stores/modules')
+      if (data) {
+        const active = data.filter((m: any) => m.is_active).map((m: any) => m.module_key)
+        setActiveModules(active)
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch store modules:', err.message)
+    }
+  }
+
+  const handleToggleModule = async (moduleKey: string, currentStatus: boolean) => {
+    setErrorMsg(null)
+    setSuccessMsg(null)
+    try {
+      await apiCall('/stores/modules', {
+        method: 'PUT',
+        body: JSON.stringify({
+          module_key: moduleKey,
+          is_active: !currentStatus
+        })
+      })
+      setSuccessMsg(`Module '${moduleKey}' status updated successfully`)
+      fetchStoreModules()
+    } catch (err: any) {
+      setErrorMsg(err.message)
     }
   }
 
@@ -1794,6 +1831,11 @@ function App() {
           <button className={`sidebar-btn ${activeTab === 'terminals' ? 'active' : ''}`} onClick={() => setActiveTab('terminals')}>
             💻 Terminals
           </button>
+          {activeModules.includes('restaurant') && (
+            <button className={`sidebar-btn ${activeTab === 'kitchen' ? 'active' : ''}`} onClick={() => setActiveTab('kitchen')}>
+              🍳 Kitchen (KDS)
+            </button>
+          )}
           {user && (user.permissions.includes('product:read') || user.permissions.includes('product:write')) && (
             <button className={`sidebar-btn ${activeTab === 'catalog' ? 'active' : ''}`} onClick={() => setActiveTab('catalog')}>
               📦 Product Catalog
@@ -1850,7 +1892,18 @@ function App() {
 
           {/* TAB 1: POINT OF SALE */}
           {activeTab === 'pos' && (
-            <div className="pos-layout">
+            activeModules.includes('restaurant') ? (
+              <RestaurantPOS
+                apiCall={apiCall}
+                activeStoreID={activeStoreID}
+                products={products}
+                categories={categories}
+                currency={settingsCurrency}
+                setErrorMsg={setErrorMsg}
+                setSuccessMsg={setSuccessMsg}
+              />
+            ) : (
+              <div className="pos-layout">
               {/* POS Left Column: Catalog */}
               <div>
                 <div className="pos-search-bar">
@@ -2112,7 +2165,8 @@ function App() {
                 )}
               </div>
             </div>
-          )}
+          )
+        )}
 
           {/* TAB 2: SALES HISTORY */}
           {activeTab === 'sales' && (
@@ -3392,6 +3446,18 @@ function App() {
             </div>
           )}
 
+          {/* TAB 12: KITCHEN DISPLAY */}
+          {activeTab === 'kitchen' && activeModules.includes('restaurant') && (
+            <div className="glass-panel" style={{ padding: '1rem' }}>
+              <KitchenDisplay
+                apiCall={apiCall}
+                activeStoreID={activeStoreID}
+                setErrorMsg={setErrorMsg}
+                setSuccessMsg={setSuccessMsg}
+              />
+            </div>
+          )}
+
           {/* TAB 11: STORE SETTINGS */}
           {activeTab === 'settings' && (
             <div className="settings-layout glass-panel" style={{ padding: '2rem', maxWidth: '600px', margin: '0 auto' }}>
@@ -3458,6 +3524,44 @@ function App() {
                     style={{ resize: 'none' }}
                   />
                 </div>
+
+                <div className="form-group" style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '1.25rem' }}>
+                  <label style={{ fontWeight: '600', marginBottom: '0.5rem', display: 'block' }}>Plugged Modules</label>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'block', marginBottom: '1rem' }}>
+                    Select which POS modules are attached and enabled for this store location.
+                  </span>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {/* Retail POS Module */}
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', padding: '0.75rem', borderRadius: '8px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                      <input
+                        type="checkbox"
+                        checked={activeModules.includes('retail')}
+                        onChange={() => handleToggleModule('retail', activeModules.includes('retail'))}
+                        style={{ width: '1.2rem', height: '1.2rem', accentColor: 'var(--accent)' }}
+                      />
+                      <div>
+                        <div style={{ fontWeight: '500' }}>🛍️ Standard Retail POS</div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Standard product catalog grid, cart, customer checkout.</div>
+                      </div>
+                    </label>
+
+                    {/* Restaurant POS Module */}
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', padding: '0.75rem', borderRadius: '8px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                      <input
+                        type="checkbox"
+                        checked={activeModules.includes('restaurant')}
+                        onChange={() => handleToggleModule('restaurant', activeModules.includes('restaurant'))}
+                        style={{ width: '1.2rem', height: '1.2rem', accentColor: 'var(--accent)' }}
+                      />
+                      <div>
+                        <div style={{ fontWeight: '500' }}>🍽️ Restaurant POS Module</div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Dining floor plans, table layouts, seat covers, KOT / kitchen display system.</div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
                 <button type="submit" className="btn btn-primary" style={{ marginTop: '0.5rem', width: '100%', padding: '1rem' }}>
                   💾 Save Settings Configuration
                 </button>
